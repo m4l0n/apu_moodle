@@ -1,7 +1,8 @@
-import requests
 import re
 from datetime import datetime
 import logging
+import aiohttp
+import asyncio
 
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,9 @@ class CredentialsInvalid(Exception):
 
 
 class Moodle:
-    def __init__(self, credentials):
+    @classmethod
+    async def create_session(cls, credentials):
+        self = Moodle()
         self.credentials = credentials
         self.lms_url = "https://lms2.apiit.edu.my/lib/ajax/service.php"
         self.headers = {
@@ -59,14 +62,14 @@ class Moodle:
             'Accept-Encoding': 'gzip, deflate, br',
             'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8,zh-TW;q=0.7,zh;q=0.6'
         }
-        self.sess_key, self.session = self.login()
+        self.sess_key, self.session = await self.login()
+        return self
 
     def url_builder(self, core):
         return f'{self.lms_url}?sesskey={self.sess_key}&info={core}'
 
-    def login(self):
+    async def login(self):
         login_url = "https://cas.apiit.edu.my/cas/login"
-        session = requests.session()
         payload = {
             'username': self.credentials['username'],
             'password': self.credentials['password'],
@@ -93,19 +96,20 @@ class Moodle:
             '_eventId': 'submit',
             'geolocation': ''
         }
-        response = session.post(login_url, headers = self.headers, data = payload)
-        if response.status_code == '200' or 200:
+        session = aiohttp.ClientSession()
+        response = await self.session.post(login_url, headers = self.headers, data = payload)
+        if response.status == 200:
             logger.info("Logged in to Moodle!")
-            sess_key = re.search(r'sesskey":"(.*?)"', response.text).group(1)
+            sess_key = re.search(r'sesskey":"(.*?)"', await response.text()).group(1)
             return sess_key, session
-        elif response.status_code == '400' or 400:
+        elif response.status == 400:
             logger.critical("400 Bad Request: Malformed request!")
-        elif response.status_code == '401' or 401:
+        elif response.status == 401:
             # Must catch this error
             logger.error("Moodle credentials invalid!")
             raise CredentialsInvalid
 
-    def get_events(self):
+    async def get_events(self):
         url = self.url_builder("core_calendar_get_action_events_by_timesort")
         payload = [
             {
@@ -119,7 +123,8 @@ class Moodle:
             }
         ]
 
-        events = self.session.post(url, json = payload, headers = self.headers).json()
+        response = await self.session.post(url, json = payload, headers = self.headers)
+        events = await response.json()
         if not events[0]['error']:
             logger.debug("Request for events successful!")
             return events[0]['data']['events']
@@ -127,6 +132,25 @@ class Moodle:
             # Must catch this exception
             logger.error("HTTP Error")
             raise requests.HTTPError(events[0]['exception']['message'])
+
+    async def upload_file(self, file_content, file_name):
+        headers = self.headers
+        headers['Content-Type'] = 'multipart/form-data'
+        multipart_data = {
+            'repo_upload_file': (file_name, file_content,
+                                 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
+            'sesskey': (None, self.sess_key),
+            'repo_id': (None, '4'),
+            'itemid': (None, '27763743'),
+            'author': (None, 'ANG RU XIAN .'),
+            'savepath': (None, '/'),
+            'title': (None, file_name),
+            'overwrite': (None, '1'),
+            'ctx_id': (None, '371982')
+        }
+        response = await self.session.post('https://lms2.apiit.edu.my/repository/repository_ajax.php?action=upload',
+                                     files = multipart_data)
+        await print(response.json())
 
 
 if __name__ == "__main__":
