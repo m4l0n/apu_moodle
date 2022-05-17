@@ -40,10 +40,7 @@ class CredentialsInvalid(Exception):
 
 
 class Moodle:
-    @classmethod
-    async def create_session(cls, credentials):
-        self = Moodle()
-        self.credentials = credentials
+    def __init__(self):
         self.lms_url = "https://lms2.apiit.edu.my/lib/ajax/service.php"
         self.headers = {
             'sec-ch-ua': '\" Not A;Brand\";v=\"99\", \"Chromium\";v=\"101\", \"Microsoft Edge\";v=\"101\"',
@@ -62,17 +59,17 @@ class Moodle:
             'Accept-Encoding': 'gzip, deflate, br',
             'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8,zh-TW;q=0.7,zh;q=0.6'
         }
-        self.sess_key, self.session = await self.login()
-        return self
+        self.sess_key = None
+        self.session = aiohttp.ClientSession()
 
     def url_builder(self, core):
         return f'{self.lms_url}?sesskey={self.sess_key}&info={core}'
 
-    async def login(self):
+    async def login(self, credentials):
         login_url = "https://cas.apiit.edu.my/cas/login"
         payload = {
-            'username': self.credentials['username'],
-            'password': self.credentials['password'],
+            'username': credentials['username'],
+            'password': credentials['password'],
             'rememberMe': 'true',
             'execution': '2907bd9b-7941-4cf6-8b21-825f1f1a2a05_ZXlKaGJHY2lPaUpJVXpVeE1pSjkuai94V1VPVkl3L2IxZkVXcmIrdlhs'
                          'Yk1Tc0ZxRkxWc0lSMnQzZWhWK0N2SEZDUGZYOS9LbzhLM1pqVml4WlRZRVIyQk1hVUYycitmUnNMK05oL1NpZmhpZzgzV'
@@ -96,12 +93,10 @@ class Moodle:
             '_eventId': 'submit',
             'geolocation': ''
         }
-        session = aiohttp.ClientSession()
-        response = await self.session.post(login_url, headers = self.headers, data = payload)
+        response = await self.session.post(login_url, data = payload, headers = self.headers)
         if response.status == 200:
             logger.info("Logged in to Moodle!")
-            sess_key = re.search(r'sesskey":"(.*?)"', await response.text()).group(1)
-            return sess_key, session
+            self.sess_key = re.search(r'sesskey":"(.*?)"', await response.text()).group(1)
         elif response.status == 400:
             logger.critical("400 Bad Request: Malformed request!")
         elif response.status == 401:
@@ -134,8 +129,6 @@ class Moodle:
             raise requests.HTTPError(events[0]['exception']['message'])
 
     async def upload_file(self, file_content, file_name):
-        headers = self.headers
-        headers['Content-Type'] = 'multipart/form-data'
         multipart_data = {
             'repo_upload_file': (file_name, file_content,
                                  'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
@@ -153,5 +146,14 @@ class Moodle:
         await print(response.json())
 
 
+async def main():
+    moodle_session = Moodle()
+    await moodle_session.login({'username': 'TP062253', 'password': '2TRY!vK6JTCF'})
+    for event in await moodle_session.get_events():
+        print(event)
+    await moodle_session.session.close()
+
+
 if __name__ == "__main__":
-    pass
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    asyncio.run(main())
